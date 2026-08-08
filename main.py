@@ -1,49 +1,79 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Dict, Any
+import pymupdf 
+from google import genai 
+import json
+import os # تأكد من إضافة المكتبة دي
 
-# Import functions from your AI and DS engines
-from ai_engine.card_generator import generate_cards
-from ds_engine.predictor import predict_retention
+# كده الكود هيقرأ المفتاح من النظام ومش هيكون مكشوف لأي حد
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key)
 
-app = FastAPI(
-    title="SummQ Python Service",
-    description="API for AI Card Generation and DS Retention Prediction",
-    version="1.0.0"
-)
-
-# --- Health Check Route ---
-@app.get("/")
-def read_root():
-    return {"status": "ok", "message": "SmartDeck Python Service is running on Render"}
-
-
-# --- AI Engine Endpoints ---
-class GenerateCardsRequest(BaseModel):
-    text_content: str
-    num_cards: int = 5
-
-@app.post("/api/ai/generate-cards")
-def api_generate_cards(request: GenerateCardsRequest):
+app = FastAPI(title="Flashcards AI API")
+# ... باقي الكود زي ما هو ...
+def generate_flashcards(text):
+    """Function to send text to the LLM and receive Q&A as JSON."""
+    model = genai.GenerativeModel('gemini-3.6-flash')
+    
+    prompt = f"""
+    You are an educational expert. Read the following text and extract the most important concepts.
+    Formulate them into flashcards consisting of a question and an answer.
+    Generate the Q&A in the same language as the provided text.
+    
+    The result must strictly be valid JSON format, as an array containing objects in the following structure:
+    [
+        {{"question": "Question here", "answer": "Answer here"}}
+    ]
+    Do not add any additional text or Markdown formatting outside the JSON.
+    
+    Text:
+    {text}
+    """
+    
+    response = model.generate_content(prompt)
+    
     try:
-        # Pass the data to the AI dev's function
-        cards = generate_cards(request.text_content, request.num_cards)
-        return {"success": True, "data": cards}
+        response_text = response.text.strip().removeprefix('```json').removesuffix('```').strip()
+        flashcards = json.loads(response_text)
+        return flashcards
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("Error parsing the JSON output:", e)
+        return None
 
-
-# --- DS Engine Endpoints ---
-class RetentionPredictionRequest(BaseModel):
-    user_id: str
-    card_id: str
-    study_history: List[Dict[str, Any]]  # Example: [{"date": "...", "score": 4}]
-
-@app.post("/api/ds/predict-retention")
-def api_predict_retention(request: RetentionPredictionRequest):
+# 3. Create the API Endpoint
+@app.post("/generate-flashcards/")
+async def create_flashcards_endpoint(file: UploadFile = File(...)):
+    """
+    This endpoint receives a PDF file, extracts text, 
+    and returns generated flashcards in JSON format.
+    """
+    # Check if the uploaded file is a PDF
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Invalid file format. Please upload a PDF.")
+    
     try:
-        # Pass the data to the DS dev's model prediction function
-        prediction = predict_retention(request.user_id, request.card_id, request.study_history)
-        return {"success": True, "prediction": prediction}
+        # Read the file content into memory
+        file_bytes = await file.read()
+        text = ""
+        
+        # Open the PDF directly from the memory stream (no need to save it locally)
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+            for page in doc:
+                text += page.get_text()
+                
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Could not extract any text from the provided PDF.")
+            
+        # Generate the flashcards
+        cards = generate_flashcards(text)
+        
+        if not cards:
+            raise HTTPException(status_code=500, detail="AI model failed to generate flashcards.")
+            
+        # Return the success response
+        return {
+            "status": "success",
+            "message": "Flashcards generated successfully",
+            "data": cards
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
