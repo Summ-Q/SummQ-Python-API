@@ -1,4 +1,3 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 import pymupdf 
 from google import genai
 from google.genai import types
@@ -7,8 +6,6 @@ import os
 
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
-
-app = FastAPI(title="Flashcards AI API")
 
 def generate_flashcards_from_chunk(text, images):
     """Function to generate flashcards from a small chunk of text/images."""
@@ -33,7 +30,6 @@ def generate_flashcards_from_chunk(text, images):
     if images:
         contents_to_send.append("Attached Images:")
         for img in images:
-            # هنبعت الصورة للموديل عشان يفهمها، بس مش محتاجين نديها ID لأنها مش هترجع لليوزر
             contents_to_send.append(
                 types.Part.from_bytes(data=img['bytes'], mime_type=f"image/{img['ext']}")
             )
@@ -49,64 +45,35 @@ def generate_flashcards_from_chunk(text, images):
         print("Error parsing chunk:", e)
         return []
 
-@app.post("/generate-flashcards/")
-async def create_flashcards_endpoint(file: UploadFile = File(None), text: str = Form(None)):
+def process_pdf_for_flashcards(file_bytes):
+    """Extracts text and images from a PDF and generates flashcards."""
     all_flashcards = []
+    current_chunk_text = ""
+    current_chunk_images = []
+    PAGES_PER_CHUNK = 3 
     
-    try:
-        if file:
-            if not file.filename.endswith('.pdf'):
-                raise HTTPException(status_code=400, detail="Invalid file format. Please upload a PDF.")
+    with pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
+        for page_num, page in enumerate(doc):
+            current_chunk_text += page.get_text() + "\n"
             
-            file_bytes = await file.read()
-            
-            current_chunk_text = ""
-            current_chunk_images = []
-            PAGES_PER_CHUNK = 3 
-            
-            with pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
-                for page_num, page in enumerate(doc):
-                    current_chunk_text += page.get_text() + "\n"
-                    
-                    for img_info in page.get_images(full=True):
-                        xref = img_info[0]
-                        base_image = doc.extract_image(xref)
-                        
-                        # بناخد الصور كـ Bytes عشان نبعتها لـ Gemini بس (بدون تحويل لـ Base64)
-                        current_chunk_images.append({
-                            "bytes": base_image["image"],
-                            "ext": base_image["ext"]
-                        })
-                    
-                    if (page_num + 1) % PAGES_PER_CHUNK == 0:
-                        cards = generate_flashcards_from_chunk(current_chunk_text, current_chunk_images)
-                        all_flashcards.extend(cards)
-                        current_chunk_text = ""
-                        current_chunk_images = []
+            for img_info in page.get_images(full=True):
+                xref = img_info[0]
+                base_image = doc.extract_image(xref)
                 
-                if current_chunk_text.strip() or current_chunk_images:
-                    cards = generate_flashcards_from_chunk(current_chunk_text, current_chunk_images)
-                    all_flashcards.extend(cards)
-                        
-        elif text:
-            if not text.strip():
-                raise HTTPException(status_code=400, detail="No text found to generate flashcards.")
-            cards = generate_flashcards_from_chunk(text, [])
+                current_chunk_images.append({
+                    "bytes": base_image["image"],
+                    "ext": base_image["ext"]
+                })
+            
+            if (page_num + 1) % PAGES_PER_CHUNK == 0:
+                cards = generate_flashcards_from_chunk(current_chunk_text, current_chunk_images)
+                all_flashcards.extend(cards)
+                current_chunk_text = ""
+                current_chunk_images = []
+        
+        # معالجة أي صفحات متبقية في آخر Chunk
+        if current_chunk_text.strip() or current_chunk_images:
+            cards = generate_flashcards_from_chunk(current_chunk_text, current_chunk_images)
             all_flashcards.extend(cards)
             
-        else:
-            raise HTTPException(status_code=400, detail="Please provide either a PDF file or text.")
-            
-        if not all_flashcards:
-            raise HTTPException(status_code=500, detail="AI model failed to generate flashcards from the provided content.")
-            
-        return {
-            "status": "success",
-            "message": "Flashcards extracted successfully",
-            "data": all_flashcards
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+    return all_flashcards
