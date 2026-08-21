@@ -1,8 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel
 
 from ai_engine.card_generator import generate_flashcards_from_chunk, process_pdf_for_flashcards
+from ds_engine.predictor import predict_card_retention
 
 app = FastAPI(title="Flashcards AI API")
+
+
+class ReviewIntervalRequest(BaseModel):
+    past_reviews_count: int
+    avg_score: float
+    days_since_last_review: float
 
 @app.post("/generate-flashcards")
 async def create_flashcards_endpoint(file: UploadFile = File(None), text: str = Form(None)):
@@ -39,3 +47,19 @@ async def create_flashcards_endpoint(file: UploadFile = File(None), text: str = 
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+
+
+@app.post("/review-interval")
+async def review_interval(request: ReviewIntervalRequest):
+    try:
+        result = predict_card_retention(
+            past_reviews_count=request.past_reviews_count,
+            avg_score=request.avg_score,
+            days_since_last_review=request.days_since_last_review,
+        )
+        return {
+            "status": "success",
+            "result": result,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
