@@ -6,3 +6,4 @@ google-genai
 scikit-learn==1.6.1
 pandas
 joblib
+python-dotenv
