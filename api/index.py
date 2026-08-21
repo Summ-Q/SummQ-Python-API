@@ -4,7 +4,7 @@ from ai_engine.card_generator import generate_flashcards_from_chunk, process_pdf
 
 app = FastAPI(title="Flashcards AI API")
 
-@app.post("/generate-flashcards/")
+@app.post("/generate-flashcards")
 async def create_flashcards_endpoint(file: UploadFile = File(None), text: str = Form(None)):
     all_flashcards = []
     
